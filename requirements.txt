@@ -1,0 +1,4 @@
+discord.py
+gTTS
+google-generativeai
+pydub
