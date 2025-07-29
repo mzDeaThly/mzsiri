@@ -10,6 +10,8 @@ import google.generativeai as genai
 from pydub import AudioSegment
 
 # --- ส่วนการตั้งค่า Logging ---
+# ตั้งค่าให้ Logger แสดงผลข้อมูลที่ระดับ INFO ขึ้นไป
+# รูปแบบการแสดงผล: [เวลา] ระดับ: ข้อความ
 logging.basicConfig(level=logging.INFO,
                     format='[%(asctime)s] %(levelname)s: %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
@@ -25,7 +27,9 @@ else:
     logger.warning("ไม่พบ GEMINI_API_KEY ใน Environment Variables, ฟังก์ชัน AI จะไม่ทำงาน")
 # -------------------------
 
-# กำหนด Intents ที่จำเป็น
+# กำหนด Intents ที่จำเป็นสำหรับบอท
+# message_content: เพื่อให้บอทอ่านเนื้อหาข้อความได้
+# voice_states: เพื่อให้บอทจัดการสถานะในห้องเสียงได้
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
@@ -33,7 +37,7 @@ intents.voice_states = True
 # กำหนด Prefixes (คำนำหน้า) สำหรับคำสั่งบอท
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# <<< เพิ่มใหม่: สร้าง Task สำหรับจัดการการเล่นเสียงในแต่ละ Guild >>>
+# --- Task สำหรับจัดการการเล่นเสียงในแต่ละ Server (Guild) ---
 async def audio_player_task(guild_id):
     """
     Task ที่ทำงานเบื้องหลังเพื่อดึงข้อความจากคิวมาเล่นเสียง
@@ -55,7 +59,7 @@ async def audio_player_task(guild_id):
         try:
             # รอจนกว่าจะมีข้อความใหม่ในคิว
             text_to_play = await message_queue.get()
-            logger.info(f"[{guild.name}] ดึงข้อความจากคิว: '{text_to_play}'")
+            logger.info(f"[{guild.name}] ดึงข้อความจากคิว TTS: '{text_to_play}'")
 
             voice_client = guild.voice_client
             if not voice_client or not voice_client.is_connected():
@@ -67,7 +71,7 @@ async def audio_player_task(guild_id):
             while voice_client.is_playing():
                 await asyncio.sleep(0.5)
             
-            # --- ส่วนสร้างไฟล์เสียงและปรับความเร็ว ---
+            # สร้างไฟล์เสียงและปรับความเร็ว
             original_audio_file = text_to_speech_gtts(text_to_play, lang='th')
             final_audio_to_play = original_audio_file
             adjusted_file = None
@@ -82,7 +86,7 @@ async def audio_player_task(guild_id):
             
             source = discord.FFmpegPCMAudio(source=final_audio_to_play)
             
-            # สร้างฟังก์ชัน callback เพื่อลบไฟล์และทำเครื่องหมายว่า task เสร็จสิ้น
+            # Callback เพื่อลบไฟล์และทำเครื่องหมายว่า task เสร็จสิ้น
             def after_playing(error):
                 cleanup_files_after_play(error, original_audio_file, adjusted_file)
                 message_queue.task_done()
@@ -95,28 +99,29 @@ async def audio_player_task(guild_id):
             break
         except Exception as e:
             logger.error(f"ERROR ใน audio_player_task ของ Guild {guild.name}: {e}", exc_info=True)
-            # ทำเครื่องหมายว่า task เสร็จสิ้นเพื่อไม่ให้คิวค้าง
             if 'message_queue' in locals() and not message_queue.empty():
                  message_queue.task_done()
 
+# --- เหตุการณ์ของบอท (Events) ---
 
-# เหตุการณ์เมื่อบอทพร้อมใช้งาน
 @bot.event
 async def on_ready():
+    """
+    ฟังก์ชันที่ทำงานเมื่อบอทพร้อมใช้งาน
+    """
     logger.info(f'บอท {bot.user.name} พร้อมใช้งานแล้ว!')
     logger.info('--------------------')
-    bot.logged_messages = []
     
-    # สำหรับโหมดการอ่านข้อความ
+    # ตั้งค่าเริ่มต้นสำหรับโหมดการอ่านข้อความ
     bot.restricted_mode_guilds = set(guild.id for guild in bot.guilds) 
     bot.designated_text_channel_id = {}
     logger.info("ตั้งค่าโหมดการอ่านข้อความเป็นเริ่มต้น: 'ปิดโหมดสายลับ' (อ่านเฉพาะช่องที่กำหนด)")
     
-    # <<< เพิ่มใหม่: คิวสำหรับเก็บข้อความและ Task สำหรับเล่นเสียง >>>
+    # สร้างคิวสำหรับเก็บข้อความและ Task สำหรับเล่นเสียง
     bot.message_queues = {}
     bot.worker_tasks = {}
 
-    # ข้อมูลถามตอบ (bot.qa_data)
+    # ข้อมูลถามตอบ
     bot.qa_data = {
         "สวัสดี": "สวัสดีครับ มีอะไรให้ผมรับใช้ครับ",
         "เจ็บไหม": "เจ็บไหม? : มาย ไม่เจ็บหรอก... แค่ชินกับการไม่ได้เป็นคนสำคัญ",
@@ -137,7 +142,6 @@ async def on_ready():
     bot.tts_speed = 1.2 
     logger.info(f"ตั้งค่าความเร็วการพูดเริ่มต้นเป็น {bot.tts_speed}x")
     
-    
 @bot.event
 async def on_guild_join(guild):
     """เมื่อบอทเข้าเซิร์ฟเวอร์ใหม่ ให้ตั้งค่าเริ่มต้นเป็นโหมดจำกัด"""
@@ -145,16 +149,13 @@ async def on_guild_join(guild):
     bot.restricted_mode_guilds.add(guild.id)
     logger.info(f"ตั้งค่าเริ่มต้นสำหรับ {guild.name} เป็น 'ปิดโหมดสายลับ' เรียบร้อยแล้ว")
 
-
-# เหตุการณ์เมื่อสถานะเสียงของสมาชิกมีการเปลี่ยนแปลง
 @bot.event
 async def on_voice_state_update(member, before, after):
+    """จัดการเมื่อสถานะเสียงของสมาชิกมีการเปลี่ยนแปลง"""
     if member == bot.user:
         return
     
-    # <<< แก้ไข: เพิ่มการหยุด worker task เมื่อบอทโดนเตะหรือย้าย >>>
     if before.channel and before.channel.guild.voice_client:
-        # ตรวจสอบว่าบอทไม่ได้อยู่ในช่องเสียงแล้ว (อาจจะโดนเตะ)
         if not member.guild.voice_client:
             guild_id = member.guild.id
             if guild_id in bot.worker_tasks:
@@ -168,11 +169,8 @@ async def on_voice_state_update(member, before, after):
         if voice_channel:
             members_in_channel = [m for m in voice_channel.members if not m.bot]
             if len(members_in_channel) == 0:
-                logger.info(
-                    f"ไม่มีสมาชิกเหลืออยู่ในช่องเสียง {voice_channel.name} แล้ว บอทกำลังจะออกจากช่องเสียง..."
-                )
+                logger.info(f"ไม่มีสมาชิกเหลือในช่องเสียง {voice_channel.name} แล้ว บอทกำลังจะออกจากช่องเสียง...")
                 try:
-                    # <<< แก้ไข: หยุด worker task ก่อนออกจากช่องเสียง >>>
                     guild_id = member.guild.id
                     if guild_id in bot.worker_tasks:
                         task = bot.worker_tasks.pop(guild_id)
@@ -182,24 +180,62 @@ async def on_voice_state_update(member, before, after):
 
                     await member.guild.voice_client.disconnect()
                     logger.info("บอทออกจากช่องเสียงแล้ว!")
-                except discord.ClientException as e:
-                    logger.error(f"ERROR: ไม่สามารถออกจากช่องเสียงได้: {e}")
                 except Exception as e:
                     logger.error(f"ERROR: เกิดข้อผิดพลาดขณะออกจากช่องเสียง: {e}")
 
-# --- Helper Functions ---
+# --- ส่วนของการบันทึกข้อความอัตโนมัติ ---
+@bot.event
+async def on_message(message):
+    """
+    ฟังก์ชันที่ทำงานทุกครั้งเมื่อมีข้อความใหม่
+    """
+    # 1. ไม่สนใจข้อความจากบอทตัวเอง
+    if message.author == bot.user:
+        return
+
+    # 2. [ส่วนที่เพิ่มใหม่] บันทึกข้อความจากทุกแชนเนลที่บอทเห็น
+    if message.guild:
+        log_text = (f"[{message.guild.name} > #{message.channel.name}] "
+                    f"{message.author.display_name}: {message.content}")
+        logger.info(log_text)
+
+    # 3. ตรวจสอบและประมวลผลคำสั่ง (เหมือนเดิม)
+    if message.content.startswith(tuple(bot.command_prefix)):
+        await bot.process_commands(message)
+        return
+
+    # 4. ตรรกะสำหรับส่งข้อความไปอ่านออกเสียง (TTS)
+    if not message.guild:
+        return
+    
+    guild_id = message.guild.id
+    if not message.guild.voice_client or not message.guild.voice_client.is_connected() or guild_id not in bot.message_queues:
+        return
+
+    # ตรวจสอบว่าต้องอ่านข้อความจากช่องนี้หรือไม่
+    if guild_id in bot.restricted_mode_guilds:
+        designated_channel_id = bot.designated_text_channel_id.get(guild_id)
+        if not designated_channel_id or message.channel.id != designated_channel_id:
+            return 
+
+    # ส่งข้อความเข้าคิวสำหรับ TTS
+    text_to_read = message.content
+    queue = bot.message_queues.get(guild_id)
+    if queue:
+        await queue.put(text_to_read)
+        # ไม่ต้อง log ซ้ำ เพราะ log ไปแล้วข้างบน
+
+
+# --- ฟังก์ชันเสริม (Helper Functions) ---
 def text_to_speech_gtts(text, lang='th'):
-    """Converts text to an MP3 file using gTTS."""
+    """แปลงข้อความเป็นไฟล์เสียง MP3 ด้วย gTTS"""
     unique_filename = f"temp_audio_{uuid.uuid4().hex}.mp3"
     tts = gTTS(text=text, lang=lang)
     tts.save(unique_filename)
     return unique_filename
 
 def change_audio_speed(input_path, speed_factor):
-    """
-    Changes the speed of an audio file using pydub.
-    speed_factor > 1.0 is faster, < 1.0 is slower.
-    """
+    """ปรับความเร็วของไฟล์เสียงด้วย pydub"""
     try:
         audio = AudioSegment.from_mp3(input_path)
         speed_adjusted_audio = audio.speedup(playback_speed=speed_factor)
@@ -210,8 +246,8 @@ def change_audio_speed(input_path, speed_factor):
         logger.error(f"Failed to adjust audio speed: {e}")
         return None
 
-# --- ฟังก์ชันสำหรับจัดการการเล่นเสียงและลบไฟล์ ---
 def cleanup_files_after_play(error, original_file, adjusted_file):
+    """ลบไฟล์เสียงชั่วคราวหลังเล่นจบ"""
     if error:
         logger.error(f'Player error: {error}')
     try:
@@ -222,8 +258,8 @@ def cleanup_files_after_play(error, original_file, adjusted_file):
     except OSError as e:
         logger.error(f"Error during file cleanup: {e}")
 
+# --- คำสั่งของบอท (Commands) ---
 
-# --- คำสั่งปรับความเร็วการพูด ---
 @bot.command(name='setspeed', aliases=['ความเร็ว'])
 async def set_speed(ctx, speed: float):
     """ตั้งค่าความเร็วในการเล่นเสียง TTS"""
@@ -239,10 +275,9 @@ async def set_speed_error(ctx, error):
     if isinstance(error, commands.BadArgument):
         await ctx.send("❌ รูปแบบไม่ถูกต้อง, โปรดใช้ตัวเลข เช่น `!setspeed 1.5`")
 
-
-# คำสั่งสำหรับบอทเข้าสู่ช่องเสียง: !เข้ามา <<< แก้ไข: เพิ่มการสร้างคิวและเริ่ม Task >>>
 @bot.command(name='เข้ามา', aliases=['มานี่', 'ตามมา'])
 async def join_command(ctx):
+    """คำสั่งให้บอทเข้าช่องเสียง"""
     if not ctx.message.author.voice:
         await ctx.send("คุณต้องอยู่ในช่องเสียงก่อนจึงจะเรียกใช้คำสั่งนี้ได้!")
         return
@@ -265,10 +300,9 @@ async def join_command(ctx):
         await ctx.send(f"🔊 เข้าร่วม **{voice_channel.name}** แล้ว! จะอ่านข้อความให้อัตโนมัติ (Dev By mzDear)")
         logger.info(f"บอทเข้าร่วมช่องเสียง: {voice_channel.name}")
 
-        # <<< เพิ่มใหม่: สร้างคิวและเริ่ม worker task สำหรับ Guild นี้ >>>
         guild_id = ctx.guild.id
         if guild_id in bot.worker_tasks:
-            bot.worker_tasks[guild_id].cancel() # ยกเลิก task เก่า (ถ้ามี)
+            bot.worker_tasks[guild_id].cancel()
         
         bot.message_queues[guild_id] = asyncio.Queue()
         bot.worker_tasks[guild_id] = bot.loop.create_task(audio_player_task(guild_id))
@@ -277,12 +311,11 @@ async def join_command(ctx):
         await ctx.send(f"ไม่สามารถเข้าร่วมช่องเสียงได้: {e}")
         logger.error(f"ERROR: ไม่สามารถเข้าร่วมช่องเสียงได้: {e}")
 
-# คำสั่งสำหรับบอทออกจากช่องเสียง: !leave <<< แก้ไข: เพิ่มการยกเลิก Task และล้างคิว >>>
 @bot.command(name='ไปไกลๆ', aliases=['หนีไป', 'ออกไป'])
 async def leave(ctx):
+    """คำสั่งให้บอทออกจากช่องเสียง"""
     if ctx.voice_client:
         guild_id = ctx.guild.id
-        # <<< เพิ่มใหม่: หยุด worker task และล้างคิว >>>
         if guild_id in bot.worker_tasks:
             task = bot.worker_tasks.pop(guild_id)
             task.cancel()
@@ -302,49 +335,10 @@ async def leave(ctx):
     else:
         await ctx.send("❌ บอทไม่ได้อยู่ในช่องเสียงใดๆ!")
 
-
-# (ส่วนคำสั่ง log, viewlog, clearlog เหมือนเดิม)
-@bot.command(name='บันทึกข้อความ', aliases=['logmessage', 'เก็บ'])
-async def log_message(ctx, *, message_content: str):
-    if not message_content:
-        await ctx.send("คุณต้องระบุข้อความที่ต้องการบันทึกครับ")
-        return
-    log_entry = {
-        "author": ctx.author.display_name, "author_id": ctx.author.id,
-        "channel": ctx.channel.name, "guild": ctx.guild.name if ctx.guild else "DM",
-        "message": message_content, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    bot.logged_messages.append(log_entry)
-    logger.info(f"คำสั่งบันทึก: ข้อความ '{message_content}' จาก {ctx.author.display_name} ถูกบันทึกแล้ว")
-    await ctx.send(f"✅ บันทึกข้อความของคุณแล้ว (จะไม่ถูกอ่านออกเสียง).")
-
-@bot.command(name='ดูบันทึก', aliases=['viewlog', 'log'])
-@commands.has_permissions(manage_channels=True)
-async def view_log(ctx):
-    if not bot.logged_messages:
-        await ctx.send("ไม่มีข้อความใดๆ ถูกบันทึกไว้ในขณะนี้.")
-        return
-    embed = discord.Embed(title="📋 บันทึกข้อความ (MediaConverter)", description=f"แสดงบันทึกข้อความทั้งหมด {len(bot.logged_messages)} รายการ", color=discord.Color.dark_blue())
-    display_limit = 10
-    recent_logs = bot.logged_messages[-display_limit:]
-    for entry in recent_logs:
-        message_preview = (entry["message"][:47] + "...") if len(entry["message"]) > 50 else entry["message"]
-        embed.add_field(name=f"[{entry['timestamp']}] {entry['author']} ({entry['channel']})", value=f"```\n{message_preview}\n```", inline=False)
-    embed.set_footer(text="บันทึกนี้จะถูกล้างเมื่อบอทรีสตาร์ท")
-    await ctx.send(embed=embed)
-
-@bot.command(name='ล้างบันทึก', aliases=['clearlog', 'clearmessages'])
-@commands.has_permissions(manage_channels=True)
-async def clear_log(ctx):
-    bot.logged_messages.clear()
-    logger.info(f"บันทึกข้อความถูกล้างโดย {ctx.author.display_name}")
-    await ctx.send("🗑️ ล้างบันทึกข้อความทั้งหมดแล้ว.")
-
-
-# (ส่วนคำสั่งสลับโหมดการอ่าน เหมือนเดิม)
 @bot.command(name='เปิดโหมดสายลับ', aliases=['readall', 'enableallchannels'])
 @commands.has_role("เจ้าของดิส")
 async def enable_read_all_channels(ctx):
+    """เปิดโหมดอ่านทุกช่อง"""
     if ctx.guild.id not in bot.restricted_mode_guilds:
         await ctx.send("✅ บอทกำลังอยู่ในโหมด 'สายลับ' ครับ.")
     else:
@@ -355,6 +349,7 @@ async def enable_read_all_channels(ctx):
 @bot.command(name='ปิดโหมดสายลับ', aliases=['restrictchannels', 'disableallchannels'])
 @commands.has_role("เจ้าของดิส")
 async def disable_read_all_channels(ctx):
+    """ปิดโหมดอ่านทุกช่อง (อ่านเฉพาะช่องที่กำหนด)"""
     if ctx.guild.id in bot.restricted_mode_guilds:
         await ctx.send("✅ บอทกำลังอยู่ในโหมด 'มุ้งมิ้ง ไม่สนโลก' ครับ.")
     else:
@@ -362,13 +357,13 @@ async def disable_read_all_channels(ctx):
         if ctx.guild.id not in bot.designated_text_channel_id:
             bot.designated_text_channel_id[ctx.guild.id] = ctx.channel.id
             logger.info(f"ตั้งค่าช่องข้อความที่กำหนดสำหรับ Guild {ctx.guild.name} เป็น {ctx.channel.name} ({ctx.channel.id})")
-        designated_channel = bot.get_channel(bot.designated_text_channel_id.get(ctx.guild.id))
         await ctx.send(f"✅ เปลี่ยนโหมด: บอทสายลับ ปิดการใช้งานแล้ว")
         logger.info(f"Guild {ctx.guild.name} switched to 'restricted channels' mode.")
 
 @bot.command(name='ดูสถานะการอ่าน', aliases=['readmode', 'readstatus'])
 @commands.has_role("เจ้าของดิส")
 async def view_read_mode_status(ctx):
+    """ดูสถานะโหมดการอ่านข้อความ"""
     mode_status = "อ่านจากทุกช่องแชทใน Guild"
     designated_channel_info = ""
     if ctx.guild.id in bot.restricted_mode_guilds:
@@ -381,10 +376,9 @@ async def view_read_mode_status(ctx):
             designated_channel_info = " (ช่องที่กำหนด: ยังไม่ได้ตั้งค่า โปรดใช้ `!เข้ามา` ในช่องที่ต้องการ)"
     await ctx.send(f"ℹ️ สถานะการอ่านข้อความใน Guild นี้: **{mode_status}**{designated_channel_info}")
 
-# --- ส่วนคำสั่งสำหรับถามตอบ (AI Gemini) --- <<< แก้ไข: ส่งคำตอบเข้าคิว >>>
 @bot.command(name='ai', aliases=['askai', 'queryai'])
 async def ask_ai_question(ctx, *, question: str):
-    """ถามคำถามบอทด้วย AI Gemini แล้วบอทจะตอบและอ่านออกเสียง"""
+    """ถามคำถามบอทด้วย AI Gemini"""
     if not GEMINI_API_KEY:
         await ctx.send("❌ ขออภัยครับ ฟังก์ชัน AI ยังไม่พร้อมใช้งาน (ผู้ดูแลยังไม่ได้ตั้งค่า API Key)")
         return
@@ -402,77 +396,36 @@ async def ask_ai_question(ctx, *, question: str):
         answer = response.text
 
         await processing_message.edit(content=f"**คำถาม:** {question}\n**คำตอบจาก Gemini:**\n{answer}")
-        logger.info(f"ผู้ใช้ {ctx.author.display_name} ถาม AI: '{question}' ตอบ: '{answer}'")
-
-        # <<< แก้ไข: ส่งคำตอบเข้าคิวแทนการเล่นเสียงโดยตรง >>>
+        
         queue = bot.message_queues.get(guild_id)
         if queue:
             await queue.put(answer)
-            logger.info(f"ส่งคำตอบ AI เข้าคิวของ Guild {ctx.guild.name}")
 
     except Exception as e:
         await processing_message.edit(content=f"❌ เกิดข้อผิดพลาดในการเรียกใช้ Gemini API: {e}")
         logger.error(f"ERROR: เกิดข้อผิดพลาดจาก Gemini API: {e}", exc_info=True)
 
-
-# --- ส่วนคำสั่งถามตอบแบบกำหนดเอง (bot.qa_data) --- <<< แก้ไข: ส่งคำตอบเข้าคิว >>>
 @bot.command(name='ถาม', aliases=['ask', 'query'])
 async def ask_question_custom(ctx, *, question: str):
-    """ถามคำถามบอทจากข้อมูลที่กำหนดเอง แล้วบอทจะตอบและอ่านออกเสียง"""
+    """ถามคำถามบอทจากข้อมูลที่กำหนดเอง"""
     guild_id = ctx.guild.id
     if not ctx.guild or not ctx.guild.voice_client or not ctx.guild.voice_client.is_connected() or guild_id not in bot.message_queues:
         await ctx.send("🔊 ผมต้องอยู่ในช่องเสียงและระบบอ่านข้อความต้องพร้อมใช้งานก่อนครับ! กรุณาสั่ง `!เข้ามา` ก่อน")
         return
 
-    normalized_question = question.strip() # ไม่ต้อง .lower() เพื่อให้ตรงกับ key ใน dict
+    normalized_question = question.strip()
     answer = bot.qa_data.get(normalized_question, "ขออภัยครับ ผมยังไม่เข้าใจคำถามของคุณ")
 
     await ctx.send(f"คำตอบ: {answer}")
-    logger.info(f"ผู้ใช้ {ctx.author.display_name} ถาม (กำหนดเอง): '{question}' ตอบ: '{answer}'")
 
     try:
-        # <<< แก้ไข: ส่งคำตอบเข้าคิวแทนการเล่นเสียงโดยตรง >>>
         queue = bot.message_queues.get(guild_id)
         if queue:
             await queue.put(answer)
-            logger.info(f"ส่งคำตอบแบบกำหนดเองเข้าคิวของ Guild {ctx.guild.name}")
 
     except Exception as e:
         logger.error(f"ERROR: ไม่สามารถส่งคำตอบเข้าคิวได้: {e}", exc_info=True)
         await ctx.send(f"❌ ขออภัยครับ เกิดข้อผิดพลาดในการส่งคำตอบไปอ่าน: {e}")
-
-
-# เหตุการณ์เมื่อมีข้อความใหม่ในช่องแชท <<< แก้ไข: ส่งข้อความเข้าคิว >>>
-@bot.event
-async def on_message(message):
-    if message.author == bot.user:
-        return
-    if message.content.startswith(tuple(bot.command_prefix)):
-        await bot.process_commands(message)
-        logger.info(f"คำสั่ง: '{message.content}' จาก {message.author.display_name} ในช่อง #{message.channel.name}")
-        return
-
-    if not message.guild:
-        return
-    
-    # ตรวจสอบว่าบอทอยู่ใน VC และมีคิวพร้อมใช้งานหรือไม่
-    guild_id = message.guild.id
-    if not message.guild.voice_client or not message.guild.voice_client.is_connected() or guild_id not in bot.message_queues:
-        return
-
-    # ตรรกะการตรวจสอบช่อง (เหมือนเดิม)
-    if guild_id in bot.restricted_mode_guilds:
-        designated_channel_id = bot.designated_text_channel_id.get(guild_id)
-        if not designated_channel_id or message.channel.id != designated_channel_id:
-            return 
-
-    # <<< แก้ไข: ส่งข้อความเข้าคิว >>>
-    text_to_read = message.content
-    queue = bot.message_queues.get(guild_id)
-    if queue:
-        await queue.put(text_to_read)
-        logger.info(f"เพิ่มข้อความ '{text_to_read}' เข้าคิวของ Guild {message.guild.name}")
-
 
 # --- ส่วนการจัดการข้อผิดพลาดสำหรับคำสั่ง ---
 @bot.event
